@@ -4,7 +4,7 @@ from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from django.db.models.loading import get_model
 from haystack.backends import BaseSearchBackend, BaseSearchQuery, log_query, EmptyResults
-from haystack.constants import ID, DJANGO_CT, DJANGO_ID
+from haystack.constants import ID, DJANGO_CT, DJANGO_DB, USE_MULTIPLE_DB, DJANGO_ID
 from haystack.exceptions import MissingDependency, MoreLikeThisError
 from haystack.models import SearchResult
 from haystack.utils import get_identifier
@@ -81,11 +81,7 @@ class SearchBackend(BaseSearchBackend):
                 # *:* matches all docs in Solr
                 self.conn.delete(q='*:*', commit=commit)
             else:
-                models_to_delete = []
-                
-                for model in models:
-                    models_to_delete.append("%s:%s.%s" % (DJANGO_CT, model._meta.app_label, model._meta.module_name))
-                
+                models_to_delete = [self.model_fragment(model) for model in models]
                 self.conn.delete(q=" OR ".join(models_to_delete), commit=commit)
             
             # Run an optimize post-clear. http://wiki.apache.org/solr/FAQ#head-9aafb5d8dff5308e8ea4fcf4b71f19f029c4bb99
@@ -289,13 +285,17 @@ class SearchBackend(BaseSearchBackend):
                         additional_fields[string_key] = self.conn._to_python(value)
                 
                 del(additional_fields[DJANGO_CT])
+                if USE_MULTIPLE_DB:
+                   del(additional_fields[DJANGO_DB])
                 del(additional_fields[DJANGO_ID])
                 del(additional_fields['score'])
                 
                 if raw_result[ID] in getattr(raw_results, 'highlighting', {}):
                     additional_fields['highlighted'] = raw_results.highlighting[raw_result[ID]]
                 
-                result = result_class(app_label, model_name, raw_result[DJANGO_ID], raw_result['score'], searchsite=self.site, **additional_fields)
+                
+                db = raw_result[DJANGO_DB] if USE_MULTIPLE_DB else None
+                result = result_class(app_label, model_name, raw_result[DJANGO_ID], raw_result['score'], searchsite=self.site, db=db, **additional_fields)
                 results.append(result)
             else:
                 hits -= 1

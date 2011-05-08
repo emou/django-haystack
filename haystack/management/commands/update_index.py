@@ -6,6 +6,7 @@ from django.core.management.base import AppCommand, CommandError
 from django.db import reset_queries
 from django.utils.encoding import smart_str
 from haystack.query import SearchQuerySet
+from haystack.constants import USE_MULTIPLE_DB
 try:
     from django.utils import importlib
 except ImportError:
@@ -108,64 +109,72 @@ class Command(AppCommand):
                 else:
                     if self.verbosity >= 2:
                         print "No updated date field found for '%s' - not restricting by age." % model.__name__
+
             
             if not hasattr(index.index_queryset(), 'filter'):
                 raise ImproperlyConfigured("The '%r' class must return a 'QuerySet' in the 'get_queryset' method." % index)
             
             # `.select_related()` seems like a good idea here but can fail on
             # nullable `ForeignKey` as well as what seems like other cases.
-            qs = index.index_queryset().filter(**extra_lookup_kwargs).order_by(model._meta.pk.name)
-            total = qs.count()
+            qsets = [index.index_queryset().filter(**extra_lookup_kwargs).order_by(model._meta.pk.name)]
+            if USE_MULTIPLE_DB:
+               model_dbs = site.get_model_databases(model)
+               if model_dbs:
+                  qsets = [qsets[0].using(db) for db in model_dbs]
             
-            if self.verbosity >= 1:
-                print "Indexing %d %s." % (total, smart_str(model._meta.verbose_name_plural))
-            
-            pks_seen = set()
-            
-            for start in range(0, total, self.batchsize):
-                end = min(start + self.batchsize, total)
-                
-                # Get a clone of the QuerySet so that the cache doesn't bloat up
-                # in memory. Useful when reindexing large amounts of data.
-                small_cache_qs = qs.all()
-                current_qs = small_cache_qs[start:end]
-                
-                for obj in current_qs:
-                    pks_seen.add(smart_str(obj.pk))
-                
-                if self.verbosity >= 2:
-                    print "  indexing %s - %d of %d." % (start+1, end, total)
-                
-                index.backend.update(index, current_qs)
-                
-                # Clear out the DB connections queries because it bloats up RAM.
-                reset_queries()
-            
-            if self.remove:
-                if self.age or total <= 0:
-                    # They're using a reduced set, which may not incorporate
-                    # all pks. Rebuild the list with everything.
-                    pks_seen = set()
-                    qs = index.index_queryset().values_list('pk', flat=True)
-                    total = qs.count()
-                    
-                    for pk in qs:
-                        pks_seen.add(smart_str(pk))
-                
-                for start in range(0, total, self.batchsize):
-                    upper_bound = start + self.batchsize
-                    
-                    # Fetch a list of results.
-                    # Can't do pk range, because id's are strings (thanks comments
-                    # & UUIDs!).
-                    stuff_in_the_index = SearchQuerySet().models(model)[start:upper_bound]
-                    
-                    # Iterate over those results.
-                    for result in stuff_in_the_index:
-                        # Be careful not to hit the DB.
-                        if not smart_str(result.pk) in pks_seen:
-                            # The id is NOT in the small_cache_qs, issue a delete.
-                            if self.verbosity >= 2:
-                                print "  removing %s." % result.pk
-                            
-                            index.backend.remove(".".join([result.app_label, result.model_name, str(result.pk)]))
+            for qs in qsets:
+               total = qs.count()
+               
+               if self.verbosity >= 1:
+                   print "Indexing %d %s." % (total, smart_str(model._meta.verbose_name_plural))
+                   print "(database %s)" % qs.db
+               
+               pks_seen = set()
+               
+               for start in range(0, total, self.batchsize):
+                   end = min(start + self.batchsize, total)
+                   
+                   # Get a clone of the QuerySet so that the cache doesn't bloat up
+                   # in memory. Useful when reindexing large amounts of data.
+                   small_cache_qs = qs.all()
+                   current_qs = small_cache_qs[start:end]
+                   
+                   for obj in current_qs:
+                       pks_seen.add(smart_str(obj.pk))
+                   
+                   if self.verbosity >= 2:
+                       print "  indexing %s - %d of %d." % (start+1, end, total)
+                   
+                   index.backend.update(index, current_qs)
+                   
+                   # Clear out the DB connections queries because it bloats up RAM.
+                   reset_queries()
+               
+               if self.remove:
+                   if self.age or total <= 0:
+                       # They're using a reduced set, which may not incorporate
+                       # all pks. Rebuild the list with everything.
+                       pks_seen = set()
+                       qs = index.index_queryset().values_list('pk', flat=True)
+                       total = qs.count()
+                       
+                       for pk in qs:
+                           pks_seen.add(smart_str(pk))
+                   
+                   for start in range(0, total, self.batchsize):
+                       upper_bound = start + self.batchsize
+                       
+                       # Fetch a list of results.
+                       # Can't do pk range, because id's are strings (thanks comments
+                       # & UUIDs!).
+                       stuff_in_the_index = SearchQuerySet().models(model)[start:upper_bound]
+                       
+                       # Iterate over those results.
+                       for result in stuff_in_the_index:
+                           # Be careful not to hit the DB.
+                           if not smart_str(result.pk) in pks_seen:
+                               # The id is NOT in the small_cache_qs, issue a delete.
+                               if self.verbosity >= 2:
+                                   print "  removing %s." % result.pk
+                               
+                               index.backend.remove(".".join([result.app_label, result.model_name, str(result.pk)]))
