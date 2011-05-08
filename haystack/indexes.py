@@ -144,7 +144,7 @@ class SearchIndex(object):
             DJANGO_ID: force_unicode(obj.pk),
         }
         if  USE_MULTIPLE_DB and obj._state.db:
-            self.preared_data[DJANGO_DB] = obj._state.db
+            self.prepared_data[DJANGO_DB] = obj._state.db
         
         for field_name, field in self.fields.items():
             # Use the possibly overridden name, which will default to the
