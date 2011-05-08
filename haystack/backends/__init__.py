@@ -7,7 +7,7 @@ from django.db.models import Q
 from django.db.models.base import ModelBase
 from django.utils import tree
 from django.utils.encoding import force_unicode
-from haystack.constants import DJANGO_CT, VALID_FILTERS, FILTER_SEPARATOR
+from haystack.constants import DJANGO_CT, DJANGO_DB, USE_MULTIPLE_DB, VALID_FILTERS, FILTER_SEPARATOR
 from haystack.exceptions import SearchBackendError, MoreLikeThisError, FacetingError
 from haystack.models import SearchResult
 try:
@@ -279,6 +279,7 @@ class BaseSearchQuery(object):
         self.query_filter = SearchNode()
         self.order_by = []
         self.models = set()
+        self.databases = set()
         self.boost = {}
         self.start_offset = 0
         self.end_offset = None
@@ -483,6 +484,18 @@ class BaseSearchQuery(object):
         """Generates the query that matches all documents."""
         return '*'
     
+    def model_fragment(self, model):
+        """Generates a query that matches a model."""
+        base_fragment = '%s:%s.%s' % (DJANGO_CT, model._meta.app_label, model._meta.module_name)
+        dbs = self.databases or self.backend.site.get_model_databases(model)
+        if USE_MULTIPLE_DB:
+            if dbs:
+                return '(%s) AND (%s)' % (base_fragment, ' OR '.join('%s:%s' % (DJANGO_DB, db) for db in dbs))
+        else:
+            if dbs:
+                raise ValueError('You have specified multiple databases, but USE_MUTLIPLE_DB is False.')
+            return base_fragment
+
     def build_query(self):
         """
         Interprets the collected query metadata and builds the final query to
@@ -495,7 +508,7 @@ class BaseSearchQuery(object):
             query = self.matching_all_fragment()
         
         if len(self.models):
-            models = sorted(['%s:%s.%s' % (DJANGO_CT, model._meta.app_label, model._meta.module_name) for model in self.models])
+            models = sorted(self.model_fragment(model) for model in self.models)
             models_clause = ' OR '.join(models)
             
             if query != self.matching_all_fragment():
@@ -599,6 +612,12 @@ class BaseSearchQuery(object):
         """
         self.order_by = []
     
+    def add_database(self, db):
+        """
+        Restricts the query requiring matches in the given database.
+        """
+        self.databases.add(model)
+
     def add_model(self, model):
         """
         Restricts the query requiring matches in the given model.

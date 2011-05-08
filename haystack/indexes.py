@@ -2,7 +2,8 @@ import copy
 import sys
 from django.db.models import signals
 from django.utils.encoding import force_unicode
-from haystack.constants import ID, DJANGO_CT, DJANGO_ID
+from django.conf import settings
+from haystack.constants import ID, DJANGO_CT, DJANGO_DB, USE_MULTIPLE_DB, DJANGO_ID
 from haystack.fields import *
 from haystack.utils import get_identifier, get_facet_field_name
 
@@ -142,6 +143,8 @@ class SearchIndex(object):
             DJANGO_CT: "%s.%s" % (obj._meta.app_label, obj._meta.module_name),
             DJANGO_ID: force_unicode(obj.pk),
         }
+        if  USE_MULTIPLE_DB and obj._state.db:
+            self.preared_data[DJANGO_DB] = obj._state.db
         
         for field_name, field in self.fields.items():
             # Use the possibly overridden name, which will default to the
@@ -318,7 +321,7 @@ class ModelSearchIndex(SearchIndex):
     """
     text = CharField(document=True, use_template=True)
     # list of reserved field names
-    fields_to_skip = (ID, DJANGO_CT, DJANGO_ID, 'content', 'text')
+    fields_to_skip = (ID, DJANGO_DB, DJANGO_CT, DJANGO_ID, 'content', 'text')
     
     def __init__(self, model, backend=None, extra_field_kwargs=None):
         self.model = model

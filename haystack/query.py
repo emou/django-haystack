@@ -7,6 +7,17 @@ from haystack.constants import REPR_OUTPUT_SIZE, ITERATOR_LOAD_PER_QUERY, DEFAUL
 from haystack.exceptions import NotRegistered
 
 
+def prepare_queryset(qs, db):
+    '''
+    Prepares a queryset for use with the specified database. This also takes
+    care of backward compatibility with older versions of Django and Haystack
+    that don't support multiple databases.
+    '''
+    if db:
+        return qs.using(db)
+    return qs
+
+
 class SearchQuerySet(object):
     """
     Provides a way to specify search parameters and lazily load results.
@@ -158,29 +169,34 @@ class SearchQuerySet(object):
         # Check if we wish to load all objects.
         if self._load_all:
             original_results = []
+            # Keep information about primary keys in the search results in the format:
+            # Model | DB | Model primary keys
             models_pks = {}
+            # Keep information about the loaded objects in the format
+            # Object | DB
             loaded_objects = {}
             
             # Remember the search position for each result so we don't have to resort later.
             for result in results:
                 original_results.append(result)
-                models_pks.setdefault(result.model, []).append(result.pk)
+                models_pks.setdefault(result.model, {}).setdefault(result.db, []).append(result.pk)
             
             # Load the objects for each model in turn.
-            for model in models_pks:
-                try:
-                    loaded_objects[model] = self.site.get_index(model).read_queryset().in_bulk(models_pks[model])
-                except NotRegistered:
-                    self.log.warning("Model not registered with search site '%s.%s'." % (self.app_label, self.model_name))
-                    # Revert to old behaviour
-                    loaded_objects[model] = model._default_manager.in_bulk(models_pks[model])
+            for model, dbs_pks in models_pks.iteritems():
+                for db, pks in dbs_pks.iteritems():
+                    try:
+                        index = self.site.get_index(model)
+                        loaded_objects.setdefault(model, {})[db] = prepare_queryset(index.read_queryset(), db).in_bulk(models_pks[model][db])
+                    except NotRegistered:
+                        # Revert to old behaviour
+                        loaded_objects.setdefault(model, {})[db] = prepare_queryset(model._default_manager, db).in_bulk(models_pks[model][db])
 
         to_cache = []
         
         for result in results:
             if self._load_all:
                 # We have to deal with integer keys being cast from strings
-                model_objects = loaded_objects.get(result.model, {})
+                model_objects = loaded_objects.get(result.model, {}).get(result.db, {})
                 if not result.pk in model_objects:
                     try:
                         result.pk = int(result.pk)
@@ -302,6 +318,18 @@ class SearchQuerySet(object):
             
             clone.query.add_model(model)
         
+        return clone
+    
+    def databases(self, *databases):
+        """Accepts an arbitrary number of database names to include in the search."""
+        clone = self._clone()
+    
+        for database in databases:
+            if not database in settings.DATABASES:
+                warnings.warn('The database %r is not in settings.DATABASES' % database)
+    
+            clone.query.add_database(database)
+     
         return clone
     
     def result_class(self, klass):
@@ -563,30 +591,35 @@ class RelatedSearchQuerySet(SearchQuerySet):
         # Check if we wish to load all objects.
         if self._load_all:
             original_results = []
+            # Keep information about primary keys in the search results in the format:
+            # Model | DB | Model primary keys
             models_pks = {}
+            # Keep information about the loaded objects in the format
+            # Object | DB
             loaded_objects = {}
             
             # Remember the search position for each result so we don't have to resort later.
             for result in results:
                 original_results.append(result)
-                models_pks.setdefault(result.model, []).append(result.pk)
+                models_pks.setdefault(result.model, {}).setdefault(result.db, []).append(result.pk)
             
             # Load the objects for each model in turn.
-            for model in models_pks:
-                if model in self._load_all_querysets:
-                    # Use the overriding queryset.
-                    loaded_objects[model] = self._load_all_querysets[model].in_bulk(models_pks[model])
-                else:
-                    # Check the SearchIndex for the model for an override.
-                    try:
-                        index = self.site.get_index(model)
-                        qs = index.load_all_queryset()
-                        loaded_objects[model] = qs.in_bulk(models_pks[model])
-                    except NotRegistered:
-                        # The model returned doesn't seem to be registered with
-                        # the current site. We should silently fail and populate
-                        # nothing for those objects.
-                        loaded_objects[model] = []
+            for model, dbs_pks in models_pks.iteritems():
+                for db, pks in dbs_pks.iteritems():
+                    if model in self._load_all_querysets:
+                            # Use the overriding queryset.
+                            loaded_objects.setdefault(model, {})[db] = prepare_queryset(self._load_all_querysets[model], db).in_bulk(models_pks[model][db])
+                    else:
+                        # Check the SearchIndex for the model for an override.
+                        try:
+                            index = self.site.get_index(model)
+                            qs = index.load_all_queryset()
+                            loaded_objects.setdefault(model, {})[db] = prepare_queryset(qs, db).in_bulk(models_pks[model][db])
+                        except NotRegistered:
+                            # The model returned doesn't seem to be registered with
+                            # the current site. We should silently fail and populate
+                            # nothing for those objects.
+                            loaded_objects.setdefault(model, {})[db] = []
         
         if len(results) + len(self._result_cache) < len(self) and len(results) < ITERATOR_LOAD_PER_QUERY:
             self._ignored_result_count += ITERATOR_LOAD_PER_QUERY - len(results)
@@ -600,7 +633,7 @@ class RelatedSearchQuerySet(SearchQuerySet):
                 except ValueError:
                     pass
                 try:
-                    result._object = loaded_objects[result.model][result.pk]
+                    result._object = loaded_objects[result.model][result.db][result.pk]
                 except (KeyError, IndexError):
                     # The object was either deleted since we indexed or should
                     # be ignored; fail silently.

@@ -92,6 +92,9 @@
     <!-- general -->
     <field name="{{ ID }}" type="string" indexed="true" stored="true" multiValued="false" required="true"/>
     <field name="{{ DJANGO_CT }}" type="string" indexed="true" stored="true" multiValued="false" />
+    {% if DJANGO_DB %}
+    <field name="{{ DJANGO_DB }}" type="string" indexed="true" stored="true" multiValued="false" />
+    {% endif %}
     <field name="{{ DJANGO_ID }}" type="string" indexed="true" stored="true" multiValued="false" />
 
     <dynamicField name="*_i"  type="sint"    indexed="true"  stored="true"/>

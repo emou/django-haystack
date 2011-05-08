@@ -21,8 +21,9 @@ class SearchSite(object):
     def __init__(self):
         self._registry = {}
         self._cached_field_mapping = None
+        self._databases = {}
     
-    def register(self, model, index_class=None):
+    def register(self, model, index_class=None, db=None):
         """
         Registers a model with the site.
         
@@ -30,6 +31,11 @@ class SearchSite(object):
         
         If no custom index is provided, a generic SearchIndex will be applied
         to the model.
+        
+        The optional db parameter defines for which database the index should
+        be registered. If it's not provided, the default database for the model
+        is used. The first registration of a model for a given database cancels
+        the use of the default database.
         """
         if not index_class:
             from haystack.indexes import BasicSearchIndex
@@ -39,21 +45,44 @@ class SearchSite(object):
             raise AttributeError('The model being registered must derive from Model.')
         
         if model in self._registry:
-            raise AlreadyRegistered('The model %s is already registered' % model.__class__)
-        
-        self._registry[model] = index_class(model)
-        self._setup(model, self._registry[model])
+            if not model in self._databases and not db:
+                raise AlreadyRegistered('The model %s is already registered with a default database' % model.__class__)
+            if db:
+                if not db in settings.DATABASES:
+                    raise ValueError('Error while trying to register model %s: ' % model +
+                                     'Database %s is not in settings.DATABASES' % db)
+                self._databases.setdefault(model, set()).add(db)
+        else:
+            self._registry[model] = index_class(model)
+            self._setup(model, self._registry[model])
+
     
-    def unregister(self, model):
+    def unregister(self, model, db=None):
         """
         Unregisters a model from the site.
+        Optionally unregisters the model from indexing using the specified database.
+        By default unregisters the model from all databases.
         """
         if model not in self._registry:
             raise NotRegistered('The model %s is not registered' % model.__class__)
+        if db:
+            try:
+                self._databases[model].remove(db)
+            except KeyError:
+                raise NotRegistered('Model %s is not registered for database %s' % (model, db))
+            else:
+                if self._databases[model]:
+                    # There are some databases left, don't completely wipe the model from the registry.
+                    return
+        # Completely unregister the module from all databases.
+        try:
+            del(self._databases[model])
+        except KeyError:
+            pass
         self._teardown(model, self._registry[model])
         del(self._registry[model])
     
-    def _setup(self, model, index):
+    def _setup(self, model, index, db=None):
         index._setup_save(model)
         index._setup_delete(model)
     
@@ -74,6 +103,13 @@ class SearchSite(object):
     def get_indexed_models(self):
         """Provide a list of all models being indexed."""
         return self._registry.keys()
+
+    def get_model_databases(self, model):
+        """Returns the databases for which the model is registered."""
+        try:
+            self._databases[model]
+        except KeyError:
+            return None
     
     def all_searchfields(self):
         """

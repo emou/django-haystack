@@ -9,6 +9,7 @@ from django.utils.text import capfirst
 # Not a Django model, but tightly tied to them and there doesn't seem to be a
 # better spot in the tree.
 from haystack.exceptions import NotRegistered
+from haystack.constants import USE_MULTIPLE_DB
 
 class SearchResult(object):
     """
@@ -19,8 +20,9 @@ class SearchResult(object):
     result will do O(N) database queries, which may not fit your needs for
     performance.
     """
-    def __init__(self, app_label, model_name, pk, score, searchsite=None, **kwargs):
+    def __init__(self, app_label, model_name, pk, score, searchsite=None, db=None, **kwargs):
         self.app_label, self.model_name = app_label, model_name
+        self.db = db
         self.pk = pk
         self.score = score
         self._object = None
@@ -45,7 +47,10 @@ class SearchResult(object):
         return logging.getLogger('haystack')
     
     def __repr__(self):
-        return "<SearchResult: %s.%s (pk=%r)>" % (self.app_label, self.model_name, self.pk)
+        if USE_MULTIPLE_DB and self.db:
+            return "<SearchResult: %s.%s (pk=%r, db=%r)>" % (self.app_label, self.model_name, self.pk, self.db)
+        else:
+            return "<SearchResult: %s.%s (pk=%r)>" % (self.app_label, self.model_name, self.pk)
     
     def __unicode__(self):
         return force_unicode(self.__repr__())
@@ -61,6 +66,10 @@ class SearchResult(object):
 
     searchindex = property(_get_searchindex)
 
+    def prepare_queryset(self, qs):
+        from haystack.query import prepare_queryset as _prepare_queryset
+        return _prepare_queryset(qs, self.db)
+ 
     def _get_object(self):
         if self._object is None:
             if self.model is None:
@@ -69,11 +78,11 @@ class SearchResult(object):
             
             try:
                 try:
-                    self._object = self.searchindex.read_queryset().get(pk=self.pk)
+                    self._object = self.prepare_queryset(self.searchindex.read_queryset()).get(pk=self.pk)
                 except NotRegistered:
                     self.log.warning("Model not registered with search site '%s.%s'." % (self.app_label, self.model_name))
                     # Revert to old behaviour
-                    self._object = self.model._default_manager.get(pk=self.pk)
+                    self._object = self.prepare_queryset(self.model._default_manager).get(pk=self.pk)
             except ObjectDoesNotExist:
                 self.log.error("Object could not be found in database for SearchResult '%s'." % self)
                 self._object = None

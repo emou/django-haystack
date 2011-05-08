@@ -1,6 +1,6 @@
 import re
 from django.utils.html import strip_tags
-from haystack.constants import ID, DJANGO_CT, DJANGO_ID
+from haystack.constants import ID, DJANGO_CT, DJANGO_DB, DJANGO_ID
 
 
 IDENTIFIER_REGEX = re.compile('^[\w\d_]+\.[\w\d_]+\.\d+$')
@@ -23,7 +23,7 @@ def get_identifier(obj_or_string):
 
 
 def get_facet_field_name(fieldname):
-    if fieldname in [ID, DJANGO_ID, DJANGO_CT]:
+    if fieldname in [ID, DJANGO_ID, DJANGO_CT, DJANGO_DB]:
         return fieldname
     
     return "%s_exact" % fieldname

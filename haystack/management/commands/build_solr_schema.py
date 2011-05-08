@@ -2,7 +2,7 @@ from optparse import make_option
 import sys
 from django.core.management.base import BaseCommand
 from django.template import loader, Context
-from haystack.constants import ID, DJANGO_CT, DJANGO_ID, DEFAULT_OPERATOR
+from haystack.constants import ID, DJANGO_CT, DJANGO_DB, USE_MULTIPLE_DB, DJANGO_ID, DEFAULT_OPERATOR
 
 
 class Command(BaseCommand):
@@ -26,14 +26,17 @@ class Command(BaseCommand):
         # Cause the default site to load.
         from haystack import backend, site
         content_field_name, fields = backend.SearchBackend().build_schema(site.all_searchfields())
-        return Context({
+        context = {
             'content_field_name': content_field_name,
             'fields': fields,
             'default_operator': DEFAULT_OPERATOR,
             'ID': ID,
             'DJANGO_CT': DJANGO_CT,
             'DJANGO_ID': DJANGO_ID,
-        })
+        }
+        if USE_MULTIPLE_DB:
+            context['DJANGO_DB'] = DJANGO_DB
+        return Context(context)
     
     def build_template(self):
         t = loader.get_template('search_configuration/solr.xml')
