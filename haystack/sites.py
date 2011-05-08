@@ -1,4 +1,6 @@
 import copy
+from django.conf import settings
+
 from haystack.exceptions import AlreadyRegistered, NotRegistered, SearchFieldError
 
 
@@ -45,16 +47,18 @@ class SearchSite(object):
             raise AttributeError('The model being registered must derive from Model.')
         
         if model in self._registry:
-            if not model in self._databases and not db:
+            if model not in self._databases and not db:
                 raise AlreadyRegistered('The model %s is already registered with a default database' % model.__class__)
-            if db:
-                if not db in settings.DATABASES:
-                    raise ValueError('Error while trying to register model %s: ' % model +
-                                     'Database %s is not in settings.DATABASES' % db)
-                self._databases.setdefault(model, set()).add(db)
+            elif model in self._databases and not db:
+                raise AlreadyRegistered('The model %s is already registered with a non-default database' % model.__class__)
         else:
             self._registry[model] = index_class(model)
             self._setup(model, self._registry[model])
+        if db:
+           if db not in settings.DATABASES:
+               raise ValueError('Error while trying to register model %s: ' % model +
+                                'Database %s is not in settings.DATABASES' % db)
+           self._databases.setdefault(model, set()).add(db)
 
     
     def unregister(self, model, db=None):
@@ -65,6 +69,7 @@ class SearchSite(object):
         """
         if model not in self._registry:
             raise NotRegistered('The model %s is not registered' % model.__class__)
+        
         if db:
             try:
                 self._databases[model].remove(db)
@@ -74,11 +79,12 @@ class SearchSite(object):
                 if self._databases[model]:
                     # There are some databases left, don't completely wipe the model from the registry.
                     return
-        # Completely unregister the module from all databases.
-        try:
-            del(self._databases[model])
-        except KeyError:
-            pass
+        else:
+           # Completely unregister the module from all databases.
+           try:
+               del(self._databases[model])
+           except KeyError:
+               pass
         self._teardown(model, self._registry[model])
         del(self._registry[model])
     
@@ -103,13 +109,15 @@ class SearchSite(object):
     def get_indexed_models(self):
         """Provide a list of all models being indexed."""
         return self._registry.keys()
-
+    
     def get_model_databases(self, model):
         """Returns the databases for which the model is registered."""
+        if model not in self._registry:
+            raise NotRegistered('The model %s is not registered' % model.__class__)
         try:
-            self._databases[model]
+            return self._databases[model]
         except KeyError:
-            return None
+            return set()
     
     def all_searchfields(self):
         """
